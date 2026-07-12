@@ -1,0 +1,13 @@
+# Windows thumbnail database files
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Folder config file
+[Dd]esktop.ini
+
+# Recycle Bin used on NTFS volumes
+$RECYCLE.BIN/
+
+# Log files
+*.log
