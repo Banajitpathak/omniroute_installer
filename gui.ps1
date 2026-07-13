@@ -758,6 +758,12 @@ $btnSmart.Add_Click({
                 Queue-Log "Installing missing dependency (remark-gfm)..."
                 Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
 
+                $lockFile = Join-Path $targetDir ".build\next\lock"
+                if (Test-Path $lockFile) {
+                    Queue-Log "Removing stale Next.js build lock..."
+                    Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+                }
+
                 Queue-Log "Building OmniRoute... (This takes a few minutes, please wait)"
                 Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
 
@@ -1105,6 +1111,12 @@ $btnUpdate.Add_Click({
 
                 Queue-Log "Installing missing dependency (remark-gfm)..."
                 Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                $lockFile = Join-Path $targetDir ".build\next\lock"
+                if (Test-Path $lockFile) {
+                    Queue-Log "Removing stale Next.js build lock..."
+                    Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+                }
 
                 Queue-Log "Building updated OmniRoute..."
                 Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
