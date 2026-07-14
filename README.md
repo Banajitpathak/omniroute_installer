@@ -22,15 +22,9 @@ This project and the core OmniRoute application are licensed under the [MIT Lice
 
 ## Troubleshooting & Tips
 
-### Stale Next.js Build Lock / Startup Crashes (Update Issues)
-If you tried to update to version `v3.8.47` or newer and the server failed to start afterwards, it was likely due to a stale Next.js build lock file (`.build/next/lock`) blocking the compilation. This installer has been patched to automatically clear these stale locks before running any new builds.
+### Smart Installation Method
+The installer automatically utilizes a dual-path installation workflow to ensure maximum reliability and speed:
+1. **Primary (NPM Global)**: Installs the official prebuilt `omniroute` package globally using `--legacy-peer-deps` to bypass React 18/19 peer dependency conflicts. This takes under 30 seconds and requires no local building.
+2. **Secondary Fallback (Shallow Clone)**: If the NPM registry is unreachable or fails, the installer automatically falls back to cloning the repository with a shallow clone (`--depth 1`) and building it locally using `pnpm` and Node.js.
 
-### Why `npm install -g omniroute` Fails or Warns
-If you or your users try to install the core `omniroute` package globally using standard `npm install -g omniroute`, npm 7+ will often fail or print peer dependency conflicts. This happens because the core `omniroute` application uses React 19, while some nested UI dependencies still require React 18.
-
-* **Recommended Solution:** Use this installer (`OmniRoute_Manager.bat`). It utilizes `pnpm` to resolve dependency conflicts cleanly and compiles the standalone production build automatically.
-* **NPM Fallback:** If you must use global npm, run:
-  ```bash
-  npm install -g omniroute --legacy-peer-deps
-  ```
 
