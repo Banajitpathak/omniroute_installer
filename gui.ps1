@@ -603,7 +603,7 @@ function Update-UIState {
     $targetDir = $txtInstallDir.Text
     $packageJsonPath = Join-Path $targetDir "package.json"
 
-    $isSetup = (Test-Path $targetDir) -and (Test-Path $packageJsonPath)
+    $isSetup = (Test-Command omniroute) -or ((Test-Path $targetDir) -and (Test-Path $packageJsonPath))
     $isRestricted = $global:isUpdating -or $global:isUninstalling -or $global:isInstalling
     
     Set-ButtonState $btnUpdate ($isSetup -and -not $isRestricted)
@@ -671,7 +671,7 @@ $btnSmart.Add_Click({
     Set-ButtonState $btnSmart $false
 
     $targetDir = $txtInstallDir.Text
-    $isSetup = (Test-Path $targetDir) -and (Test-Path (Join-Path $targetDir "package.json"))
+    $isSetup = (Test-Command omniroute) -or ((Test-Path $targetDir) -and (Test-Path (Join-Path $targetDir "package.json")))
 
     if (-not $isSetup) {
         $global:isInstalling = $true
@@ -729,52 +729,81 @@ $btnSmart.Add_Click({
             
             Refresh-Path
             
-            if (-not (Test-Path (Join-Path $targetDir "package.json"))) {
-                if (Test-Path $targetDir) {
-                    Queue-Log "Cleaning target directory before clone..."
-                    Remove-Item -Path $targetDir -Recurse -Force -ErrorAction SilentlyContinue
-                }
-                Queue-Log "Cloning OmniRoute repository..."
-                $proc = Start-HiddenProcess "git" "clone https://github.com/diegosouzapw/OmniRoute.git `"$targetDir`""
-                Wait-HiddenProcess $proc | Out-Null
-                
-                # Apply Windows build patches right after cloning
-                Patch-OmniRouteFiles -targetDir $targetDir
+            if (-not (Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
             }
 
-            if (Test-Path (Join-Path $targetDir "package.json")) {
-                Queue-Log "Installing pnpm... (This takes a minute, please wait)"
-                Start-Process "cmd" -ArgumentList "/c npm install -g pnpm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+            $npmInstallSuccess = $false
+            Queue-Log "Installing OmniRoute via NPM... (This downloads prebuilt files, please wait)"
+            try {
+                $proc = Start-Process "cmd" -ArgumentList "/c npm install -g omniroute --legacy-peer-deps" -WorkingDirectory $targetDir -WindowStyle Hidden -PassThru -ErrorAction Stop
+                while (-not $proc.HasExited) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 100
+                }
+                
+                # Check if command is now available
+                Refresh-Path
+                if ($proc.ExitCode -eq 0 -and (Test-Command omniroute)) {
+                    $npmInstallSuccess = $true
+                    Queue-Log "OmniRoute successfully installed via NPM!"
+                    Create-Shortcut
+                } else {
+                    Queue-Log "NPM global install did not complete successfully or 'omniroute' command not found."
+                }
+            } catch {
+                Queue-Log "NPM global install failed: $_"
+            }
 
-                Queue-Log "Resolving dependencies via pnpm (safe phase)..."
-                Start-Process "cmd" -ArgumentList "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Approving build scripts (bun) for pnpm..."
-                Start-Process "cmd" -ArgumentList "/c pnpm approve-builds --all" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Installing dependencies via pnpm... (This takes a few minutes, please wait)"
-                Start-Process "cmd" -ArgumentList "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Installing missing dependency (remark-gfm)..."
-                Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                $lockFile = Join-Path $targetDir ".build\next\lock"
-                if (Test-Path $lockFile) {
-                    Queue-Log "Removing stale Next.js build lock..."
-                    Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+            if (-not $npmInstallSuccess) {
+                Queue-Log "Falling back to git clone method..."
+                if (-not (Test-Path (Join-Path $targetDir "package.json"))) {
+                    if (Test-Path $targetDir) {
+                        Queue-Log "Cleaning target directory before clone..."
+                        Remove-Item -Path $targetDir -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                    Queue-Log "Cloning OmniRoute repository (shallow clone)..."
+                    $proc = Start-HiddenProcess "git" "clone --depth 1 https://github.com/diegosouzapw/OmniRoute.git `"$targetDir`""
+                    Wait-HiddenProcess $proc | Out-Null
+                    
+                    # Apply Windows build patches right after cloning
+                    Patch-OmniRouteFiles -targetDir $targetDir
                 }
 
-                Queue-Log "Building OmniRoute... (This takes a few minutes, please wait)"
-                Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                if (Test-Path (Join-Path $targetDir "package.json")) {
+                    Queue-Log "Installing pnpm... (This takes a minute, please wait)"
+                    Start-Process "cmd" -ArgumentList "/c npm install -g pnpm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
 
-                Queue-Log "Building CLI and staging packages (build:cli)..."
-                Start-Process "cmd" -ArgumentList "/c pnpm run build:cli" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    Queue-Log "Resolving dependencies via pnpm (safe phase)..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
 
-                Queue-Log "Registering omniroute command globally..."
-                Start-Process "cmd" -ArgumentList "/c npm link" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-                
-                Queue-Log "Setup completely finished!"
-                Create-Shortcut
+                    Queue-Log "Approving build scripts (bun) for pnpm..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm approve-builds --all" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Installing dependencies via pnpm... (This takes a few minutes, please wait)"
+                    Start-Process "cmd" -ArgumentList "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Installing missing dependency (remark-gfm)..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    $lockFile = Join-Path $targetDir ".build\next\lock"
+                    if (Test-Path $lockFile) {
+                        Queue-Log "Removing stale Next.js build lock..."
+                        Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+                    }
+
+                    Queue-Log "Building OmniRoute... (This takes a few minutes, please wait)"
+                    Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Building CLI and staging packages (build:cli)..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm run build:cli" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Registering omniroute command globally..."
+                    Start-Process "cmd" -ArgumentList "/c npm link" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    
+                    Queue-Log "Setup completely finished!"
+                    Create-Shortcut
+                }
             }
         } finally {
             $global:isInstalling = $false
@@ -798,7 +827,13 @@ $btnSmart.Add_Click({
         } catch { Queue-Log "Firewall bypass cancelled. You may see a firewall popup." }
     }
     
-    $global:serverProcess = Start-Process cmd -ArgumentList "/k title OmniRoute Server && pnpm run start" -WorkingDirectory $targetDir -WindowStyle Minimized -PassThru
+    if (Test-Command omniroute) {
+        Queue-Log "Starting OmniRoute server (Global NPM)..."
+        $global:serverProcess = Start-Process cmd -ArgumentList "/k title OmniRoute Server && omniroute" -WorkingDirectory $targetDir -WindowStyle Minimized -PassThru
+    } else {
+        Queue-Log "Starting OmniRoute server (Local Clone)..."
+        $global:serverProcess = Start-Process cmd -ArgumentList "/k title OmniRoute Server && pnpm run start" -WorkingDirectory $targetDir -WindowStyle Minimized -PassThru
+    }
 
     Queue-Log "Server is starting..."
     Update-UIState
@@ -971,6 +1006,21 @@ $btnUninstall.Add_Click({
                 Start-Process cmd.exe -ArgumentList "/c rmdir /s /q `"$targetDir`"" -WindowStyle Hidden
             }
         }
+
+        if (Test-Command omniroute) {
+            Queue-Log "Uninstalling global OmniRoute NPM package..."
+            try {
+                $proc = Start-Process "cmd" -ArgumentList "/c npm uninstall -g omniroute" -WindowStyle Hidden -PassThru -ErrorAction Stop
+                while (-not $proc.HasExited) {
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 100
+                }
+                Queue-Log "Global OmniRoute NPM package uninstalled."
+            } catch {
+                Queue-Log "Failed to uninstall global OmniRoute NPM package: $_"
+            }
+        }
+
         Queue-Log "OmniRoute has been uninstalled."
         $shortcutPath = Join-Path ([Environment]::GetFolderPath('Desktop')) "OmniRoute Dashboard.lnk"
         if (Test-Path $shortcutPath) { Remove-Item $shortcutPath -Force }
@@ -997,158 +1047,244 @@ $btnUpdate.Add_Click({
 
     try {
         $targetDir = $txtInstallDir.Text
-        Queue-Log "Running git fetch to check for remote updates..."
-        $procFetch = Start-HiddenProcess "git" "fetch" $targetDir
-        $exitFetch = Wait-HiddenProcess $procFetch
+        $isGitClone = (Test-Path $targetDir) -and (Test-Path (Join-Path $targetDir "package.json"))
 
-        if ($exitFetch -ne 0) {
-            Queue-Log "Error: Failed to fetch updates from remote repository."
-            [System.Windows.Forms.MessageBox]::Show(
-                "Failed to fetch updates from remote repository. Please check your internet connection.",
-                "Check for Updates Failed",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Error
-            )
-            return
-        }
-
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "git"
-        $psi.Arguments = "rev-list --count HEAD..origin/main"
-        $psi.WorkingDirectory = $targetDir
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.UseShellExecute = $false
-        $psi.CreateNoWindow = $true
-        $proc = New-Object System.Diagnostics.Process
-        $proc.StartInfo = $psi
-        $proc.Start() | Out-Null
-        while (-not $proc.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
-
-        $output = $proc.StandardOutput.ReadToEnd()
-        $errOutput = $proc.StandardError.ReadToEnd()
-        if ($proc.ExitCode -ne 0) {
-            Queue-Log "Error: git rev-list failed: $errOutput"
-            return
-        }
-
-        [int]$behindCount = 0
-        if (-not [int]::TryParse($output.Trim(), [ref]$behindCount)) {
-            Queue-Log "Error: Failed to parse update count: $output"
-            return
-        }
-
-        if ($behindCount -gt 0) {
-            $msgBoxResult = [System.Windows.Forms.MessageBox]::Show(
-                "An update is available! You are $behindCount commit(s) behind the remote main branch.`n`nDo you want to update now?",
-                "Update Available",
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Question
-            )
-
-            if ($msgBoxResult -eq [System.Windows.Forms.DialogResult]::Yes) {
-                if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
-                    Queue-Log "Stopping OmniRoute server..."
-                    Start-Process "taskkill.exe" -ArgumentList "/PID $($global:serverProcess.Id) /T /F" -WindowStyle Hidden -Wait
-                    $global:serverProcess = $null
-                    Queue-Log "Server stopped."
+        if (-not $isGitClone) {
+            # NPM Update Flow
+            Queue-Log "Checking NPM registry for updates..."
+            $localVer = $null
+            try {
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName = "cmd"
+                $psi.Arguments = "/c npm list -g omniroute --depth=0"
+                $psi.RedirectStandardOutput = $true
+                $psi.RedirectStandardError = $true
+                $psi.UseShellExecute = $false
+                $psi.CreateNoWindow = $true
+                $proc = New-Object System.Diagnostics.Process
+                $proc.StartInfo = $psi
+                $proc.Start() | Out-Null
+                while (-not $proc.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
+                $npmListOut = $proc.StandardOutput.ReadToEnd()
+                if ($npmListOut -match "omniroute@([\d\.]+)") {
+                    $localVer = $Matches[1]
                 }
+            } catch {}
 
-                $hasChanges = $false
-                try {
-                    $psiDiff = New-Object System.Diagnostics.ProcessStartInfo
-                    $psiDiff.FileName = "git"
-                    $psiDiff.Arguments = "status --porcelain"
-                    $psiDiff.WorkingDirectory = $targetDir
-                    $psiDiff.RedirectStandardOutput = $true
-                    $psiDiff.RedirectStandardError = $true
-                    $psiDiff.UseShellExecute = $false
-                    $psiDiff.CreateNoWindow = $true
-                    $procDiff = New-Object System.Diagnostics.Process
-                    $procDiff.StartInfo = $psiDiff
-                    $procDiff.Start() | Out-Null
-                    while (-not $procDiff.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
-                    $diffOut = $procDiff.StandardOutput.ReadToEnd().Trim()
-                    if ($diffOut -ne "") {
-                        foreach ($line in ($diffOut -split "`r?`n")) {
-                            if ($line.Trim() -and -not $line.StartsWith("??")) { $hasChanges = $true; break }
-                        }
+            $remoteVer = $null
+            try {
+                $psi = New-Object System.Diagnostics.ProcessStartInfo
+                $psi.FileName = "cmd"
+                $psi.Arguments = "/c npm view omniroute version"
+                $psi.RedirectStandardOutput = $true
+                $psi.RedirectStandardError = $true
+                $psi.UseShellExecute = $false
+                $psi.CreateNoWindow = $true
+                $proc = New-Object System.Diagnostics.Process
+                $proc.StartInfo = $psi
+                $proc.Start() | Out-Null
+                while (-not $proc.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
+                $remoteVer = $proc.StandardOutput.ReadToEnd().Trim()
+            } catch {}
+
+            if ($localVer -and $remoteVer -and ($localVer -ne $remoteVer)) {
+                $msgBoxResult = [System.Windows.Forms.MessageBox]::Show(
+                    "An update is available for OmniRoute!`n`nLocal Version: $localVer`nLatest Version: $remoteVer`n`nDo you want to update now?",
+                    "Update Available",
+                    [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                    [System.Windows.Forms.MessageBoxIcon]::Question
+                )
+                if ($msgBoxResult -eq [System.Windows.Forms.DialogResult]::Yes) {
+                    if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
+                        Queue-Log "Stopping OmniRoute server..."
+                        Start-Process "taskkill.exe" -ArgumentList "/PID $($global:serverProcess.Id) /T /F" -WindowStyle Hidden -Wait
+                        $global:serverProcess = $null
+                        Queue-Log "Server stopped."
                     }
-                } catch {}
 
-                if ($hasChanges) {
-                    Queue-Log "Local modifications detected. Stashing changes..."
-                    $procStash = Start-HiddenProcess "git" "stash" $targetDir
-                    Wait-HiddenProcess $procStash | Out-Null
+                    Queue-Log "Updating OmniRoute via NPM... (Please wait)"
+                    $proc = Start-Process "cmd" -ArgumentList "/c npm install -g omniroute --legacy-peer-deps" -WorkingDirectory $targetDir -WindowStyle Hidden -PassThru
+                    while (-not $proc.HasExited) {
+                        [System.Windows.Forms.Application]::DoEvents()
+                        Start-Sleep -Milliseconds 100
+                    }
+                    if ($proc.ExitCode -eq 0) {
+                        Queue-Log "OmniRoute successfully updated to $remoteVer!"
+                        [System.Windows.Forms.MessageBox]::Show(
+                            "OmniRoute has been successfully updated.",
+                            "Update Complete",
+                            [System.Windows.Forms.MessageBoxButtons]::OK,
+                            [System.Windows.Forms.MessageBoxIcon]::Information
+                        )
+                    } else {
+                        Queue-Log "Failed to update OmniRoute via NPM."
+                    }
                 }
+            } else {
+                $statusMsg = if ($localVer) { "OmniRoute is already up-to-date (Version: $localVer)." } else { "OmniRoute is already up-to-date." }
+                Queue-Log $statusMsg
+                [System.Windows.Forms.MessageBox]::Show(
+                    $statusMsg,
+                    "Up to Date",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
+            }
+        } else {
+            # Git Clone Update Flow
+            Queue-Log "Running git fetch to check for remote updates..."
+            $procFetch = Start-HiddenProcess "git" "fetch" $targetDir
+            $exitFetch = Wait-HiddenProcess $procFetch
 
-                Queue-Log "Pulling latest changes (git pull)..."
-                $procPull = Start-HiddenProcess "git" "pull" $targetDir
-                $exitPull = Wait-HiddenProcess $procPull
+            if ($exitFetch -ne 0) {
+                Queue-Log "Error: Failed to fetch updates from remote repository."
+                [System.Windows.Forms.MessageBox]::Show(
+                    "Failed to fetch updates from remote repository. Please check your internet connection.",
+                    "Check for Updates Failed",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Error
+                )
+                return
+            }
 
-                if ($hasChanges) {
-                    Queue-Log "Restoring local stashed changes..."
-                    $procPop = Start-HiddenProcess "git" "stash pop" $targetDir
-                    Wait-HiddenProcess $procPop | Out-Null
-                }
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = "git"
+            $psi.Arguments = "rev-list --count HEAD..origin/main"
+            $psi.WorkingDirectory = $targetDir
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $proc = New-Object System.Diagnostics.Process
+            $proc.StartInfo = $psi
+            $proc.Start() | Out-Null
+            while (-not $proc.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
 
-                if ($exitPull -ne 0) {
-                    Queue-Log "Error: git pull failed with exit code $exitPull."
-                    return
-                }
+            $output = $proc.StandardOutput.ReadToEnd()
+            $errOutput = $proc.StandardError.ReadToEnd()
+            if ($proc.ExitCode -ne 0) {
+                Queue-Log "Error: git rev-list failed: $errOutput"
+                return
+            }
 
-                # Apply Windows build patches right after pulling updates
-                Patch-OmniRouteFiles -targetDir $targetDir
+            [int]$behindCount = 0
+            if (-not [int]::TryParse($output.Trim(), [ref]$behindCount)) {
+                Queue-Log "Error: Failed to parse update count: $output"
+                return
+            }
 
-                Queue-Log "Resolving updated dependencies via pnpm (safe phase)..."
-                Start-Process "cmd" -ArgumentList "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Approving build scripts (bun) for pnpm..."
-                Start-Process "cmd" -ArgumentList "/c pnpm approve-builds --all" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Installing updated dependencies (pnpm install)..."
-                Start-Process "cmd" -ArgumentList "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Installing missing dependency (remark-gfm)..."
-                Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                $lockFile = Join-Path $targetDir ".build\next\lock"
-                if (Test-Path $lockFile) {
-                    Queue-Log "Removing stale Next.js build lock..."
-                    Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
-                }
-
-                Queue-Log "Building updated OmniRoute..."
-                Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Building updated CLI and staging packages (build:cli)..."
-                Start-Process "cmd" -ArgumentList "/c pnpm run build:cli" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Re-linking omniroute command globally..."
-                Start-Process "cmd" -ArgumentList "/c npm link" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
-
-                Queue-Log "Update completed successfully!"
-                $restartBox = [System.Windows.Forms.MessageBox]::Show(
-                    "OmniRoute has been updated to the latest version.`n`nWould you like to restart the Manager GUI now to apply the updates?",
-                    "Update Successful",
+            if ($behindCount -gt 0) {
+                $msgBoxResult = [System.Windows.Forms.MessageBox]::Show(
+                    "An update is available! You are $behindCount commit(s) behind the remote main branch.`n`nDo you want to update now?",
+                    "Update Available",
                     [System.Windows.Forms.MessageBoxButtons]::YesNo,
                     [System.Windows.Forms.MessageBoxIcon]::Question
                 )
 
-                if ($restartBox -eq [System.Windows.Forms.DialogResult]::Yes) {
-                    Queue-Log "Restarting Manager GUI..."
-                    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -WindowStyle Normal
-                    $form.Close()
+                if ($msgBoxResult -eq [System.Windows.Forms.DialogResult]::Yes) {
+                    if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
+                        Queue-Log "Stopping OmniRoute server..."
+                        Start-Process "taskkill.exe" -ArgumentList "/PID $($global:serverProcess.Id) /T /F" -WindowStyle Hidden -Wait
+                        $global:serverProcess = $null
+                        Queue-Log "Server stopped."
+                    }
+
+                    $hasChanges = $false
+                    try {
+                        $psiDiff = New-Object System.Diagnostics.ProcessStartInfo
+                        $psiDiff.FileName = "git"
+                        $psiDiff.Arguments = "status --porcelain"
+                        $psiDiff.WorkingDirectory = $targetDir
+                        $psiDiff.RedirectStandardOutput = $true
+                        $psiDiff.RedirectStandardError = $true
+                        $psiDiff.UseShellExecute = $false
+                        $psiDiff.CreateNoWindow = $true
+                        $procDiff = New-Object System.Diagnostics.Process
+                        $procDiff.StartInfo = $psiDiff
+                        $procDiff.Start() | Out-Null
+                        while (-not $procDiff.HasExited) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 50 }
+                        $diffOut = $procDiff.StandardOutput.ReadToEnd().Trim()
+                        if ($diffOut -ne "") {
+                            foreach ($line in ($diffOut -split "`r?`n")) {
+                                if ($line.Trim() -and -not $line.StartsWith("??")) { $hasChanges = $true; break }
+                            }
+                        }
+                    } catch {}
+
+                    if ($hasChanges) {
+                        Queue-Log "Local modifications detected. Stashing changes..."
+                        $procStash = Start-HiddenProcess "git" "stash" $targetDir
+                        Wait-HiddenProcess $procStash | Out-Null
+                    }
+
+                    Queue-Log "Pulling latest changes (git pull)..."
+                    $procPull = Start-HiddenProcess "git" "pull" $targetDir
+                    $exitPull = Wait-HiddenProcess $procPull
+
+                    if ($hasChanges) {
+                        Queue-Log "Restoring local stashed changes..."
+                        $procPop = Start-HiddenProcess "git" "stash pop" $targetDir
+                        Wait-HiddenProcess $procPop | Out-Null
+                    }
+
+                    if ($exitPull -ne 0) {
+                        Queue-Log "Error: git pull failed with exit code $exitPull."
+                        return
+                    }
+
+                    # Apply Windows build patches right after pulling updates
+                    Patch-OmniRouteFiles -targetDir $targetDir
+
+                    Queue-Log "Resolving updated dependencies via pnpm (safe phase)..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Approving build scripts (bun) for pnpm..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm approve-builds --all" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Installing updated dependencies (pnpm install)..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Installing missing dependency (remark-gfm)..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    $lockFile = Join-Path $targetDir ".build\next\lock"
+                    if (Test-Path $lockFile) {
+                        Queue-Log "Removing stale Next.js build lock..."
+                        Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+                    }
+
+                    Queue-Log "Building updated OmniRoute..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Building updated CLI and staging packages (build:cli)..."
+                    Start-Process "cmd" -ArgumentList "/c pnpm run build:cli" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Re-linking omniroute command globally..."
+                    Start-Process "cmd" -ArgumentList "/c npm link" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+
+                    Queue-Log "Update completed successfully!"
+                    $restartBox = [System.Windows.Forms.MessageBox]::Show(
+                        "OmniRoute has been updated to the latest version.`n`nWould you like to restart the Manager GUI now to apply the updates?",
+                        "Update Successful",
+                        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                        [System.Windows.Forms.MessageBoxIcon]::Question
+                    )
+
+                    if ($restartBox -eq [System.Windows.Forms.DialogResult]::Yes) {
+                        Queue-Log "Restarting Manager GUI..."
+                        Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$PSCommandPath`"" -WindowStyle Normal
+                        $form.Close()
+                    }
                 }
+            } else {
+                Queue-Log "OmniRoute is already up-to-date."
+                [System.Windows.Forms.MessageBox]::Show(
+                    "OmniRoute is already up-to-date.",
+                    "Up to Date",
+                    [System.Windows.Forms.MessageBoxButtons]::OK,
+                    [System.Windows.Forms.MessageBoxIcon]::Information
+                )
             }
-        } else {
-            Queue-Log "OmniRoute is already up-to-date."
-            [System.Windows.Forms.MessageBox]::Show(
-                "OmniRoute is already up-to-date.",
-                "Up to Date",
-                [System.Windows.Forms.MessageBoxButtons]::OK,
-                [System.Windows.Forms.MessageBoxIcon]::Information
-            )
         }
     } finally {
         $global:isUpdating = $false
@@ -1163,7 +1299,7 @@ $form.Add_Load({
 
     # Auto-start OmniRoute server on launch if it's already set up and not running
     $targetDir = $txtInstallDir.Text
-    $isSetup = (Test-Path $targetDir) -and (Test-Path (Join-Path $targetDir "package.json"))
+    $isSetup = (Test-Command omniroute) -or ((Test-Path $targetDir) -and (Test-Path (Join-Path $targetDir "package.json")))
     $isServerActive = $false
     if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
         $isServerActive = $true
