@@ -5,6 +5,8 @@ A lightweight, user-friendly Windows GUI utility and installer wrapper for manag
 This utility simplifies running and managing the OmniRoute service on Windows via a custom PowerShell GUI launcher.
 
 ## Key Features
+![OmniRoute Manager GUI](https://github.com/user-attachments/assets/bf0efbe2-889d-4b4e-ab23-ac251c36ae0c)
+
 - **One-Click Run**: Launch the PowerShell GUI directly using `OmniRoute_Manager.bat`.
 - **System Tray/Console Management**: Conveniently start, stop, or configure settings.
 - **Port Mapping**: Automatically works with the default OmniRoute dashboard port (`20128`).
