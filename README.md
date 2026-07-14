@@ -29,4 +29,14 @@ The installer automatically utilizes a dual-path installation workflow to ensure
 1. **Primary (NPM Global)**: Installs the official prebuilt `omniroute` package globally using `--legacy-peer-deps` to bypass React 18/19 peer dependency conflicts. This takes under 30 seconds and requires no local building.
 2. **Secondary Fallback (Shallow Clone)**: If the NPM registry is unreachable or fails, the installer automatically falls back to cloning the repository with a shallow clone (`--depth 1`) and building it locally using `pnpm` and Node.js.
 
+## Contributing
+
+Contributions are welcome! If you would like to help improve the Windows Installer/Manager:
+1. **Report Bugs or Propose Features**: Open a topic in the [Issues](https://github.com/Banajitpathak/omniroute_installer/issues) or [Discussions](https://github.com/Banajitpathak/omniroute_installer/discussions) section.
+2. **Submit Code Changes**:
+   - Fork the repository.
+   - Create a branch for your feature or fix.
+   - Commit your changes and verify that the PowerShell script parses cleanly.
+   - Open a Pull Request (PR) back to the `main` branch.
+
 
