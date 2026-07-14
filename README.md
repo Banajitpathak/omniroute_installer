@@ -1,6 +1,6 @@
 # OmniRoute Manager & Installer
 
-A lightweight, user-friendly Windows GUI utility and installer wrapper for managing [OmniRoute](https://github.com/diegosouzapw/OmniRoute) (a multi-route cellular network manager).
+A lightweight, user-friendly Windows GUI utility and installer wrapper for managing [OmniRoute](https://github.com/diegosouzapw/OmniRoute) (a local, unified AI gateway connecting coding agents and editors to 230+ AI providers via a single OpenAI-compatible endpoint).
 
 This utility simplifies running and managing the OmniRoute service on Windows via a custom PowerShell GUI launcher.
 
