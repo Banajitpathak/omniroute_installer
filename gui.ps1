@@ -599,6 +599,23 @@ function Get-IsBrowserRunning {
     return $global:lastBrowserCheckResult
 }
 
+function Stop-OmniRouteServer {
+    $pidToKill = $null
+    if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
+        $pidToKill = $global:serverProcess.Id
+    } else {
+        $netstat = netstat -ano | Select-String "127.0.0.1:20128" | Select-Object -First 1
+        if ($netstat -match "\s+(\d+)$") { $pidToKill = $Matches[1] }
+    }
+
+    if ($pidToKill) {
+        Queue-Log "Stopping OmniRoute server and all child processes (PID: $pidToKill)..."
+        Start-Process "taskkill.exe" -ArgumentList "/PID $pidToKill /T /F" -WindowStyle Hidden -Wait
+        $global:serverProcess = $null
+        Queue-Log "Server stopped."
+    }
+}
+
 function Update-UIState {
     $targetDir = $txtInstallDir.Text
     $packageJsonPath = Join-Path $targetDir "package.json"
@@ -772,19 +789,24 @@ $btnSmart.Add_Click({
 
                 if (Test-Path (Join-Path $targetDir "package.json")) {
                     Queue-Log "Installing pnpm... (This takes a minute, please wait)"
-                    Start-Process "cmd" -ArgumentList "/c npm install -g pnpm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c npm install -g pnpm" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Resolving dependencies via pnpm (safe phase)..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Approving build scripts (bun) for pnpm..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm approve-builds --all" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm approve-builds --all" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Installing dependencies via pnpm... (This takes a few minutes, please wait)"
-                    Start-Process "cmd" -ArgumentList "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Installing missing dependency (remark-gfm)..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm add remark-gfm" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     $lockFile = Join-Path $targetDir ".build\next\lock"
                     if (Test-Path $lockFile) {
@@ -793,13 +815,20 @@ $btnSmart.Add_Click({
                     }
 
                     Queue-Log "Building OmniRoute... (This takes a few minutes, please wait)"
-                    Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm run build" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Building CLI and staging packages (build:cli)..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm run build:cli" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm run build:cli" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
+
+                    Queue-Log "Rebuilding native module (better-sqlite3)..."
+                    $rebuildProc = Start-HiddenProcess "cmd" "/c pnpm rebuild better-sqlite3" $targetDir
+                    Wait-HiddenProcess $rebuildProc | Out-Null
 
                     Queue-Log "Registering omniroute command globally..."
-                    Start-Process "cmd" -ArgumentList "/c npm link" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c npm link" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
                     
                     Queue-Log "Setup completely finished!"
                     Create-Shortcut
@@ -858,19 +887,9 @@ $btnSmart.Add_Click({
 
 $btnStop.Add_Click({
     if ($btnStop.Tag -eq $false) { return }
-    $pidToKill = $null
-    if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
-        $pidToKill = $global:serverProcess.Id
-    } else {
-        $netstat = netstat -ano | Select-String "127.0.0.1:20128" | Select-Object -First 1
-        if ($netstat -match "\s+(\d+)$") { $pidToKill = $Matches[1] }
-    }
-
-    if ($pidToKill) {
-        Queue-Log "Stopping OmniRoute server and all child processes..."
-        Start-Process "taskkill.exe" -ArgumentList "/PID $pidToKill /T /F" -WindowStyle Hidden -Wait
-        $global:serverProcess = $null
-        Queue-Log "Server stopped."
+    $isActive = (Test-PortActive 20128) -or ($global:serverProcess -and -not $global:serverProcess.HasExited)
+    if ($isActive) {
+        Stop-OmniRouteServer
     } else {
         Queue-Log "No running server detected on port 20128."
     }
@@ -1095,20 +1114,16 @@ $btnUpdate.Add_Click({
                     [System.Windows.Forms.MessageBoxIcon]::Question
                 )
                 if ($msgBoxResult -eq [System.Windows.Forms.DialogResult]::Yes) {
-                    if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
-                        Queue-Log "Stopping OmniRoute server..."
-                        Start-Process "taskkill.exe" -ArgumentList "/PID $($global:serverProcess.Id) /T /F" -WindowStyle Hidden -Wait
-                        $global:serverProcess = $null
-                        Queue-Log "Server stopped."
-                    }
+                    Stop-OmniRouteServer
 
                     Queue-Log "Updating OmniRoute via NPM... (Please wait)"
-                    $proc = Start-Process "cmd" -ArgumentList "/c npm install -g omniroute --legacy-peer-deps" -WorkingDirectory $targetDir -WindowStyle Hidden -PassThru
-                    while (-not $proc.HasExited) {
-                        [System.Windows.Forms.Application]::DoEvents()
-                        Start-Sleep -Milliseconds 100
-                    }
-                    if ($proc.ExitCode -eq 0) {
+                    $proc = Start-HiddenProcess "cmd" "/c npm install -g omniroute --legacy-peer-deps" $targetDir
+                    $exitCode = Wait-HiddenProcess $proc
+                    if ($exitCode -eq 0) {
+                        Queue-Log "Running post-update native module rebuild for SQLite..."
+                        $rebuildProc = Start-HiddenProcess "cmd" "/c npm rebuild better-sqlite3 -g" $targetDir
+                        Wait-HiddenProcess $rebuildProc | Out-Null
+
                         Queue-Log "OmniRoute successfully updated to $remoteVer!"
                         [System.Windows.Forms.MessageBox]::Show(
                             "OmniRoute has been successfully updated.",
@@ -1182,12 +1197,7 @@ $btnUpdate.Add_Click({
                 )
 
                 if ($msgBoxResult -eq [System.Windows.Forms.DialogResult]::Yes) {
-                    if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
-                        Queue-Log "Stopping OmniRoute server..."
-                        Start-Process "taskkill.exe" -ArgumentList "/PID $($global:serverProcess.Id) /T /F" -WindowStyle Hidden -Wait
-                        $global:serverProcess = $null
-                        Queue-Log "Server stopped."
-                    }
+                    Stop-OmniRouteServer
 
                     $hasChanges = $false
                     try {
@@ -1236,16 +1246,20 @@ $btnUpdate.Add_Click({
                     Patch-OmniRouteFiles -targetDir $targetDir
 
                     Queue-Log "Resolving updated dependencies via pnpm (safe phase)..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm install --ignore-scripts --fetch-timeout 600000 --fetch-retries 5" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Approving build scripts (bun) for pnpm..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm approve-builds --all" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm approve-builds --all" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Installing updated dependencies (pnpm install)..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm install --fetch-timeout 600000 --fetch-retries 5" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Installing missing dependency (remark-gfm)..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm add remark-gfm" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm add remark-gfm" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     $lockFile = Join-Path $targetDir ".build\next\lock"
                     if (Test-Path $lockFile) {
@@ -1254,13 +1268,20 @@ $btnUpdate.Add_Click({
                     }
 
                     Queue-Log "Building updated OmniRoute..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm run build" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm run build" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Building updated CLI and staging packages (build:cli)..."
-                    Start-Process "cmd" -ArgumentList "/c pnpm run build:cli" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c pnpm run build:cli" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
+
+                    Queue-Log "Rebuilding native module (better-sqlite3)..."
+                    $rebuildProc = Start-HiddenProcess "cmd" "/c pnpm rebuild better-sqlite3" $targetDir
+                    Wait-HiddenProcess $rebuildProc | Out-Null
 
                     Queue-Log "Re-linking omniroute command globally..."
-                    Start-Process "cmd" -ArgumentList "/c npm link" -WorkingDirectory $targetDir -WindowStyle Hidden -Wait
+                    $proc = Start-HiddenProcess "cmd" "/c npm link" $targetDir
+                    Wait-HiddenProcess $proc | Out-Null
 
                     Queue-Log "Update completed successfully!"
                     $restartBox = [System.Windows.Forms.MessageBox]::Show(
@@ -1315,7 +1336,14 @@ $form.Add_Load({
 
 $form.Add_FormClosing({
     param($sender, $e)
+    $isServerActive = $false
     if ($global:serverProcess -and -not $global:serverProcess.HasExited) {
+        $isServerActive = $true
+    } elseif (Test-PortActive 20128) {
+        $isServerActive = $true
+    }
+
+    if ($isServerActive) {
         $msgBoxResult = [System.Windows.Forms.MessageBox]::Show(
             "The OmniRoute server is still running in the background.`n`nDo you want to stop the server and exit?",
             "Stop Server?",
@@ -1325,8 +1353,7 @@ $form.Add_FormClosing({
         
         if ($msgBoxResult -eq [System.Windows.Forms.DialogResult]::Yes) {
             Queue-Log "Stopping server before exit..."
-            Start-Process "taskkill.exe" -ArgumentList "/PID $($global:serverProcess.Id) /T /F" -WindowStyle Hidden
-            $global:serverProcess = $null
+            Stop-OmniRouteServer
         } else {
             $e.Cancel = $true
         }
