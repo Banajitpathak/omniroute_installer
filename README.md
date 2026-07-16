@@ -29,6 +29,22 @@ The installer automatically utilizes a dual-path installation workflow to ensure
 1. **Primary (NPM Global)**: Installs the official prebuilt `omniroute` package globally using `--legacy-peer-deps` to bypass React 18/19 peer dependency conflicts. This takes under 30 seconds and requires no local building.
 2. **Secondary Fallback (Shallow Clone)**: If the NPM registry is unreachable or fails, the installer automatically falls back to cloning the repository with a shallow clone (`--depth 1`) and building it locally using `pnpm` and Node.js.
 
+### Troubleshooting: "Internal Server Error" on Second/Subsequent Launches
+If the application runs successfully on the first launch but returns an **Internal Server Error (500)** on subsequent launches, this is caused by an upstream native-module ABI mismatch bug in `better-sqlite3` within core OmniRoute (versions `v3.8.45` through `v3.8.48`).
+
+To resolve this issue:
+* **For standard Global NPM installations:**
+  Open a command prompt and rebuild the native SQLite dependency globally:
+  ```bash
+  npm rebuild better-sqlite3 -g
+  ```
+  *(Alternatively, navigate to `%APPDATA%\npm\node_modules\omniroute\dist` and run `npm rebuild better-sqlite3`)*
+* **For secondary fallback (shallow clone) installations:**
+  Navigate to your installation folder (default: `C:\omniroute` or `C:\omniroute\node_modules\omniroute\dist`) and run:
+  ```bash
+  npm rebuild better-sqlite3
+  ```
+
 ## Contributing
 
 Contributions are welcome! If you would like to help improve the Windows Installer/Manager:
